@@ -9,6 +9,14 @@ const pino = require('pino');
 
 const logger = pino({ level: process.env.LOG_LEVEL || 'info' });
 
+const resolveConsignmentId = async (shipmentId) => {
+  if (!shipmentId) return null;
+  const consignment = await db('consignments')
+    .where('consignment_id', shipmentId)
+    .first();
+  return consignment?.id || null;
+};
+
 // Validation schema
 const shipmentArrivalSchema = Joi.object({
   consignmentId: Joi.string().min(3).max(50).required(),
@@ -59,6 +67,69 @@ const otpAlertSchema = Joi.object({
   lockDuration: Joi.string().optional()
 });
 
+const deliveryOptionSchema = Joi.object({
+  type: Joi.string().valid('DELIVERY_OPTION_CHANGE').required(),
+  shipmentId: Joi.string().min(3).max(50).required(),
+  recipientEmail: Joi.string().email().required(),
+  recipientName: Joi.string().min(2).max(100).required(),
+  previousOption: Joi.string().allow(null, ''),
+  currentOption: Joi.string().required(),
+  consignment: Joi.object({
+    shipmentId: Joi.string().required(),
+    deliveryDate: Joi.string().isoDate().allow(null),
+    receiverName: Joi.string().allow(null, ''),
+    receiverAddress: Joi.object({
+      address1: Joi.string().allow(null, ''),
+      address2: Joi.string().allow(null, ''),
+      suburb: Joi.string().allow(null, ''),
+      city: Joi.string().allow(null, ''),
+      state: Joi.string().allow(null, ''),
+      country: Joi.string().allow(null, ''),
+      postcode: Joi.string().allow(null, '')
+    }).required()
+  }).required(),
+  optionDetails: Joi.object().optional()
+});
+
+const cutoffReminderSchema = Joi.object({
+  type: Joi.string().valid('CUTOFF_REMINDER').required(),
+  shipmentId: Joi.string().min(3).max(50).required(),
+  recipientEmail: Joi.string().email().required(),
+  recipientName: Joi.string().min(2).max(100).required(),
+  cutoffTime: Joi.string().isoDate().required(),
+  deliveryDetails: Joi.object({
+    deliveryDate: Joi.string().isoDate().allow(null),
+    option: Joi.string().allow(null, ''),
+    address: Joi.object({
+      address1: Joi.string().allow(null, ''),
+      address2: Joi.string().allow(null, ''),
+      suburb: Joi.string().allow(null, ''),
+      city: Joi.string().allow(null, ''),
+      state: Joi.string().allow(null, ''),
+      country: Joi.string().allow(null, ''),
+      postcode: Joi.string().allow(null, ''),
+      parcelPointName: Joi.string().allow(null, ''),
+      parcelPointId: Joi.string().allow(null, '')
+    }).required()
+  }).required()
+});
+
+const invoiceSchema = Joi.object({
+  type: Joi.string().valid('INVOICE_READY').required(),
+  shipmentId: Joi.string().min(3).max(50).required(),
+  recipientEmail: Joi.string().email().required(),
+  recipientName: Joi.string().min(2).max(100).required(),
+  invoice: Joi.object({
+    consignmentId: Joi.string().required(),
+    subtotal: Joi.number().required(),
+    tax: Joi.number().required(),
+    total: Joi.number().required(),
+    currency: Joi.string().required(),
+    breakdown: Joi.object().required()
+  }).required(),
+  deliveryDetails: Joi.object().optional()
+});
+
 /**
  * Send shipment arrival notification
  * Handles email, SMS, and push notifications
@@ -83,6 +154,14 @@ exports.sendShipmentArrival = async (req, res, next) => {
 
     const payload = value;
     const notificationId = uuidv4();
+
+    const consignmentId = await resolveConsignmentId(payload.consignmentId);
+    if (!consignmentId) {
+      return res.status(StatusCodes.NOT_FOUND).json({
+        success: false,
+        error: 'Consignment not found'
+      });
+    }
 
     logger.info(
       { consignmentId: payload.consignmentId, notificationId },
@@ -115,7 +194,7 @@ exports.sendShipmentArrival = async (req, res, next) => {
 
     // Store notification log in database
     await db('notifications').insert({
-      consignment_id: payload.consignmentId,
+      consignment_id: consignmentId,
       channel: 'MULTI',
       from_address: process.env.SMTP_FROM,
       to_address: payload.recipientEmail,
@@ -219,10 +298,18 @@ exports.sendAccessLink = async (req, res, next) => {
     const payload = value;
     const notificationId = uuidv4();
 
+    const consignmentId = await resolveConsignmentId(payload.shipmentId);
+    if (!consignmentId) {
+      return res.status(StatusCodes.NOT_FOUND).json({
+        success: false,
+        error: 'Consignment not found'
+      });
+    }
+
     const result = await emailService.sendAccessLinkEmail(payload);
 
     await db('notifications').insert({
-      consignment_id: payload.shipmentId,
+      consignment_id: consignmentId,
       channel: 'EMAIL',
       from_address: process.env.SMTP_FROM,
       to_address: payload.recipientEmail,
@@ -272,6 +359,14 @@ exports.sendOtp = async (req, res, next) => {
     const payload = value;
     const notificationId = uuidv4();
 
+    const consignmentId = await resolveConsignmentId(payload.shipmentId);
+    if (!consignmentId) {
+      return res.status(StatusCodes.NOT_FOUND).json({
+        success: false,
+        error: 'Consignment not found'
+      });
+    }
+
     if (payload.channel === 'EMAIL' && !payload.recipientEmail) {
       return res.status(StatusCodes.BAD_REQUEST).json({
         success: false,
@@ -294,7 +389,7 @@ exports.sendOtp = async (req, res, next) => {
     }
 
     await db('notifications').insert({
-      consignment_id: payload.shipmentId,
+      consignment_id: consignmentId,
       channel: payload.channel,
       from_address: payload.channel === 'EMAIL' ? process.env.SMTP_FROM : process.env.TWILIO_PHONE_NUMBER,
       to_address: payload.channel === 'EMAIL' ? payload.recipientEmail : payload.recipientPhone,
@@ -316,6 +411,176 @@ exports.sendOtp = async (req, res, next) => {
     });
   } catch (error) {
     logger.error(error, 'Error processing OTP notification');
+    return next(error);
+  }
+};
+
+/**
+ * Send delivery option change email
+ */
+exports.sendDeliveryOptionChange = async (req, res, next) => {
+  try {
+    const { error, value } = deliveryOptionSchema.validate(req.body, {
+      abortEarly: false,
+      stripUnknown: true
+    });
+
+    if (error) {
+      return res.status(StatusCodes.BAD_REQUEST).json({
+        success: false,
+        error: 'Validation failed',
+        details: error.details.map(detail => ({
+          field: detail.path.join('.'),
+          message: detail.message
+        }))
+      });
+    }
+
+    const payload = value;
+    const notificationId = uuidv4();
+
+    const consignmentId = await resolveConsignmentId(payload.shipmentId);
+    if (!consignmentId) {
+      return res.status(StatusCodes.NOT_FOUND).json({
+        success: false,
+        error: 'Consignment not found'
+      });
+    }
+
+    const result = await emailService.sendDeliveryOptionChangeEmail(payload);
+
+    await db('notifications').insert({
+      consignment_id: consignmentId,
+      channel: 'EMAIL',
+      from_address: process.env.SMTP_FROM,
+      to_address: payload.recipientEmail,
+      type: payload.type,
+      status: result.success ? 'SENT' : 'FAILED',
+      reference_id: notificationId,
+      message: JSON.stringify(payload),
+      metadata: JSON.stringify({
+        previousOption: payload.previousOption,
+        currentOption: payload.currentOption
+      }),
+      created_by: 'notification-service'
+    });
+
+    return res.status(StatusCodes.ACCEPTED).json({
+      success: true,
+      data: {
+        notificationId,
+        status: result.success ? 'SENT' : 'FAILED'
+      },
+      message: 'Delivery option change email processed'
+    });
+  } catch (error) {
+    logger.error(error, 'Error processing delivery option change notification');
+    return next(error);
+  }
+};
+
+/**
+ * Send cutoff reminder email
+ */
+exports.sendCutoffReminder = async (req, res, next) => {
+  try {
+    const { error, value } = cutoffReminderSchema.validate(req.body, {
+      abortEarly: false,
+      stripUnknown: true
+    });
+
+    if (error) {
+      return res.status(StatusCodes.BAD_REQUEST).json({
+        success: false,
+        error: 'Validation failed',
+        details: error.details.map(detail => ({
+          field: detail.path.join('.'),
+          message: detail.message
+        }))
+      });
+    }
+
+    const payload = value;
+    const notificationId = uuidv4();
+
+    await emailService.sendCutoffReminderEmail(payload);
+
+    await db('notifications').insert({
+      consignment_id: payload.shipmentId,
+      channel: 'EMAIL',
+      from_address: process.env.SMTP_FROM,
+      to_address: payload.recipientEmail,
+      type: payload.type,
+      status: 'QUEUED',
+      reference_id: notificationId,
+      message: JSON.stringify(payload),
+      metadata: JSON.stringify({ cutoffTime: payload.cutoffTime }),
+      created_by: 'notification-service'
+    });
+
+    return res.status(StatusCodes.ACCEPTED).json({
+      success: true,
+      data: {
+        notificationId,
+        shipmentId: payload.shipmentId,
+        status: 'QUEUED'
+      }
+    });
+  } catch (error) {
+    logger.error(error, 'Error processing cutoff reminder');
+    return next(error);
+  }
+};
+
+/**
+ * Send invoice notification email
+ */
+exports.sendInvoiceReady = async (req, res, next) => {
+  try {
+    const { error, value } = invoiceSchema.validate(req.body, {
+      abortEarly: false,
+      stripUnknown: true
+    });
+
+    if (error) {
+      return res.status(StatusCodes.BAD_REQUEST).json({
+        success: false,
+        error: 'Validation failed',
+        details: error.details.map(detail => ({
+          field: detail.path.join('.'),
+          message: detail.message
+        }))
+      });
+    }
+
+    const payload = value;
+    const notificationId = uuidv4();
+
+    await emailService.sendInvoiceEmail(payload);
+
+    await db('notifications').insert({
+      consignment_id: payload.shipmentId,
+      channel: 'EMAIL',
+      from_address: process.env.SMTP_FROM,
+      to_address: payload.recipientEmail,
+      type: payload.type,
+      status: 'QUEUED',
+      reference_id: notificationId,
+      message: JSON.stringify(payload),
+      metadata: JSON.stringify({ total: payload.invoice.total, currency: payload.invoice.currency }),
+      created_by: 'notification-service'
+    });
+
+    return res.status(StatusCodes.ACCEPTED).json({
+      success: true,
+      data: {
+        notificationId,
+        shipmentId: payload.shipmentId,
+        status: 'QUEUED'
+      }
+    });
+  } catch (error) {
+    logger.error(error, 'Error processing invoice notification');
     return next(error);
   }
 };
@@ -344,8 +609,16 @@ exports.sendOtpAlert = async (req, res, next) => {
     const payload = value;
     const notificationId = uuidv4();
 
+    const consignmentId = await resolveConsignmentId(payload.shipmentId);
+    if (!consignmentId) {
+      return res.status(StatusCodes.NOT_FOUND).json({
+        success: false,
+        error: 'Consignment not found'
+      });
+    }
+
     await db('notifications').insert({
-      consignment_id: payload.shipmentId,
+      consignment_id: consignmentId,
       channel: 'SYSTEM',
       from_address: 'system',
       to_address: null,
