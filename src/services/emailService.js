@@ -112,6 +112,127 @@ class EmailService {
   }
 
   /**
+   * Send delivery option change email
+   */
+  async sendDeliveryOptionChangeEmail(payload) {
+    try {
+      const { recipientEmail, shipmentId } = payload;
+
+      const htmlContent = this.generateDeliveryOptionChangeHtml(payload);
+
+      const mailOptions = {
+        from: process.env.SMTP_FROM,
+        to: recipientEmail,
+        subject: `Delivery Option Updated for Shipment ${shipmentId}`,
+        html: htmlContent,
+        headers: {
+          'X-Shipment-ID': shipmentId
+        }
+      };
+
+      const result = await this.transporter.sendMail(mailOptions);
+
+      logger.info(
+        { shipmentId, recipientEmail, messageId: result.messageId },
+        'Delivery option change email sent successfully'
+      );
+
+      return {
+        success: true,
+        messageId: result.messageId,
+        timestamp: new Date()
+      };
+    } catch (error) {
+      logger.error(
+        { error: error.message, shipmentId: payload.shipmentId },
+        'Failed to send delivery option change email'
+      );
+      throw error;
+    }
+  }
+
+  /**
+   * Send cutoff reminder email
+   */
+  async sendCutoffReminderEmail(payload) {
+    try {
+      const { recipientEmail, shipmentId } = payload;
+
+      const htmlContent = this.generateCutoffReminderHtml(payload);
+
+      const mailOptions = {
+        from: process.env.SMTP_FROM,
+        to: recipientEmail,
+        subject: `Delivery Cutoff Reminder for Shipment ${shipmentId}`,
+        html: htmlContent,
+        headers: {
+          'X-Shipment-ID': shipmentId,
+          'X-Cutoff-Time': payload.cutoffTime
+        }
+      };
+
+      const result = await this.transporter.sendMail(mailOptions);
+
+      logger.info(
+        { shipmentId, recipientEmail, messageId: result.messageId },
+        'Cutoff reminder email sent successfully'
+      );
+
+      return {
+        success: true,
+        messageId: result.messageId,
+        timestamp: new Date()
+      };
+    } catch (error) {
+      logger.error(
+        { error: error.message, shipmentId: payload.shipmentId },
+        'Failed to send cutoff reminder email'
+      );
+      throw error;
+    }
+  }
+
+  /**
+   * Send invoice email
+   */
+  async sendInvoiceEmail(payload) {
+    try {
+      const { recipientEmail, shipmentId } = payload;
+
+      const htmlContent = this.generateInvoiceHtml(payload);
+
+      const mailOptions = {
+        from: process.env.SMTP_FROM,
+        to: recipientEmail,
+        subject: `Invoice Ready for Shipment ${shipmentId}`,
+        html: htmlContent,
+        headers: {
+          'X-Shipment-ID': shipmentId
+        }
+      };
+
+      const result = await this.transporter.sendMail(mailOptions);
+
+      logger.info(
+        { shipmentId, recipientEmail, messageId: result.messageId },
+        'Invoice email sent successfully'
+      );
+
+      return {
+        success: true,
+        messageId: result.messageId,
+        timestamp: new Date()
+      };
+    } catch (error) {
+      logger.error(
+        { error: error.message, shipmentId: payload.shipmentId },
+        'Failed to send invoice email'
+      );
+      throw error;
+    }
+  }
+
+  /**
    * Send OTP email
    */
   async sendOtpEmail(payload) {
@@ -375,6 +496,322 @@ class EmailService {
 
           <div class="footer">
             <p>&copy; 2026 ParcelPoint - All rights reserved</p>
+          </div>
+        </div>
+      </body>
+      </html>
+    `;
+  }
+
+  /**
+   * Generate HTML email for delivery option change
+   */
+  generateDeliveryOptionChangeHtml(payload) {
+    const {
+      recipientName,
+      shipmentId,
+      previousOption,
+      currentOption,
+      consignment,
+      optionDetails
+    } = payload;
+
+    const optionLabels = {
+      CHANGE_DELIVERY_DATE: 'Change Delivery Date',
+      COLLECT_FROM_PARCELPOINT: 'Collect from ParcelPoint',
+      LEAVE_IN_SAFE_PLACE: 'Leave in Safe Place',
+      LEAVE_WITH_TRUSTED_PERSON: 'Leave with Trusted Person',
+      ALTERNATE_ADDRESS: 'Alternate Address',
+      HOLD_FOR_COLLECTION: 'Hold for Collection'
+    };
+
+    const deliveryDate = consignment?.deliveryDate
+      ? new Date(consignment.deliveryDate).toLocaleDateString('en-US', {
+        weekday: 'long',
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric'
+      })
+      : 'Not set';
+
+    const address = consignment?.receiverAddress || {};
+    const addressLines = [
+      address.address1,
+      address.address2,
+      address.suburb,
+      address.city,
+      address.state,
+      address.country,
+      address.postcode
+    ].filter(Boolean).join(', ');
+
+    const previousText = optionLabels[previousOption] || previousOption || 'None';
+    const currentText = optionLabels[currentOption] || currentOption || 'Not set';
+
+    const detailItems = [];
+    if (optionDetails?.delivery_date) {
+      detailItems.push({ label: 'New Delivery Date', value: new Date(optionDetails.delivery_date).toLocaleString('en-US') });
+    }
+    if (optionDetails?.pp_location_name) {
+      detailItems.push({ label: 'ParcelPoint Location', value: optionDetails.pp_location_name });
+    }
+    if (optionDetails?.safe_location) {
+      detailItems.push({ label: 'Safe Place', value: optionDetails.safe_location });
+    }
+    if (optionDetails?.trusted_person_name) {
+      detailItems.push({ label: 'Trusted Person', value: optionDetails.trusted_person_name });
+    }
+    if (optionDetails?.trusted_person_mobile) {
+      detailItems.push({ label: 'Trusted Person Phone', value: optionDetails.trusted_person_mobile });
+    }
+    if (optionDetails?.address_1) {
+      const altAddress = [
+        optionDetails.address_1,
+        optionDetails.address_2,
+        optionDetails.suburb,
+        optionDetails.city,
+        optionDetails.state,
+        optionDetails.country,
+        optionDetails.postcode
+      ].filter(Boolean).join(', ');
+      detailItems.push({ label: 'Alternate Address', value: altAddress });
+    }
+    if (optionDetails?.additional_info) {
+      detailItems.push({ label: 'Additional Info', value: optionDetails.additional_info });
+    }
+
+    const detailHtml = detailItems.length
+      ? detailItems.map(item => `
+          <tr>
+            <td style="padding: 6px 0; font-weight: 600; color: #444;">${item.label}</td>
+            <td style="padding: 6px 0; color: #222;">${item.value}</td>
+          </tr>
+        `).join('')
+      : '<tr><td style="padding: 6px 0; color: #666;">No additional details provided.</td></tr>';
+
+    return `
+      <!DOCTYPE html>
+      <html lang="en">
+      <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <style>
+          * { margin: 0; padding: 0; box-sizing: border-box; }
+          body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f4f6f8; color: #222; }
+          .container { max-width: 640px; margin: 20px auto; background: #ffffff; border-radius: 10px; overflow: hidden; box-shadow: 0 2px 10px rgba(0,0,0,0.08); }
+          .header { background: #1f4b99; color: #fff; padding: 28px 24px; text-align: left; }
+          .header h1 { font-size: 22px; margin-bottom: 6px; }
+          .header p { opacity: 0.9; font-size: 14px; }
+          .content { padding: 24px; }
+          .section { margin-bottom: 20px; }
+          .badge { display: inline-block; padding: 6px 12px; background: #e9f0ff; color: #1f4b99; border-radius: 999px; font-size: 12px; font-weight: 600; }
+          .summary { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 16px; }
+          .summary-card { background: #f8f9fb; padding: 12px; border-radius: 8px; }
+          .summary-label { font-size: 12px; color: #666; text-transform: uppercase; margin-bottom: 6px; }
+          .summary-value { font-size: 14px; font-weight: 600; color: #222; }
+          table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+          .footer { background: #f4f6f8; padding: 18px; text-align: center; font-size: 12px; color: #666; }
+          @media (max-width: 600px) {
+            .summary { grid-template-columns: 1fr; }
+          }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <h1>Delivery Option Updated</h1>
+            <p>Shipment ${shipmentId}</p>
+          </div>
+          <div class="content">
+            <p style="margin-bottom: 12px;">Hello ${recipientName},</p>
+            <p style="margin-bottom: 16px;">Your delivery preference has been updated. Details are below.</p>
+
+            <div class="section">
+              <span class="badge">Change Summary</span>
+              <div class="summary">
+                <div class="summary-card">
+                  <div class="summary-label">Previous Option</div>
+                  <div class="summary-value">${previousText}</div>
+                </div>
+                <div class="summary-card">
+                  <div class="summary-label">Current Option</div>
+                  <div class="summary-value">${currentText}</div>
+                </div>
+              </div>
+            </div>
+
+            <div class="section">
+              <span class="badge">Shipment Details</span>
+              <table>
+                <tr>
+                  <td style="padding: 6px 0; font-weight: 600; color: #444;">Estimated Delivery</td>
+                  <td style="padding: 6px 0; color: #222;">${deliveryDate}</td>
+                </tr>
+                <tr>
+                  <td style="padding: 6px 0; font-weight: 600; color: #444;">Delivery Address</td>
+                  <td style="padding: 6px 0; color: #222;">${addressLines || 'Not available'}</td>
+                </tr>
+              </table>
+            </div>
+
+            <div class="section">
+              <span class="badge">Option Details</span>
+              <table>
+                ${detailHtml}
+              </table>
+            </div>
+          </div>
+          <div class="footer">
+            <p>If you did not make this change, please contact support.</p>
+          </div>
+        </div>
+      </body>
+      </html>
+    `;
+  }
+
+  /**
+   * Generate HTML email for cutoff reminder
+   */
+  generateCutoffReminderHtml(payload) {
+    const { recipientName, shipmentId, cutoffTime, deliveryDetails } = payload;
+    const deliveryDate = deliveryDetails?.deliveryDate
+      ? new Date(deliveryDetails.deliveryDate).toLocaleString('en-US')
+      : 'Not set';
+    const cutoff = new Date(cutoffTime).toLocaleString('en-US');
+    const address = deliveryDetails?.address || {};
+    const addressLines = [
+      address.address1,
+      address.address2,
+      address.suburb,
+      address.city,
+      address.state,
+      address.country,
+      address.postcode
+    ].filter(Boolean).join(', ');
+
+    return `
+      <!DOCTYPE html>
+      <html lang="en">
+      <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <style>
+          * { margin: 0; padding: 0; box-sizing: border-box; }
+          body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f7f7f7; color: #222; }
+          .container { max-width: 620px; margin: 20px auto; background: #ffffff; border-radius: 10px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+          .header { background: #0f172a; color: #fff; padding: 24px; }
+          .content { padding: 24px; }
+          .highlight { background: #fef3c7; padding: 12px; border-radius: 6px; margin: 16px 0; }
+          .label { font-size: 12px; color: #6b7280; text-transform: uppercase; margin-bottom: 6px; }
+          .value { font-size: 16px; font-weight: 600; }
+          .footer { background: #f7f7f7; padding: 16px; text-align: center; font-size: 12px; color: #6b7280; }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <h1>Delivery Cutoff Reminder</h1>
+            <p>Shipment ${shipmentId}</p>
+          </div>
+          <div class="content">
+            <p>Hello ${recipientName},</p>
+            <p>Your delivery preference cutoff is in 48 hours. Please review your details before the cutoff time.</p>
+
+            <div class="highlight">
+              <div class="label">Cutoff Time</div>
+              <div class="value">${cutoff}</div>
+            </div>
+
+            <div class="label">Scheduled Delivery</div>
+            <div class="value">${deliveryDate}</div>
+
+            <div class="label" style="margin-top: 12px;">Delivery Address</div>
+            <div class="value">${addressLines || 'Not available'}</div>
+          </div>
+          <div class="footer">
+            <p>If you need to update your delivery preference, please do so before the cutoff time.</p>
+          </div>
+        </div>
+      </body>
+      </html>
+    `;
+  }
+
+  /**
+   * Generate HTML email for invoice
+   */
+  generateInvoiceHtml(payload) {
+    const { recipientName, shipmentId, invoice } = payload;
+    const breakdown = invoice.breakdown || {};
+
+    return `
+      <!DOCTYPE html>
+      <html lang="en">
+      <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <style>
+          * { margin: 0; padding: 0; box-sizing: border-box; }
+          body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f5f5f5; color: #222; }
+          .container { max-width: 640px; margin: 20px auto; background: #ffffff; border-radius: 10px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+          .header { background: #065f46; color: #fff; padding: 24px; }
+          .content { padding: 24px; }
+          table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+          td { padding: 8px 0; border-bottom: 1px solid #e5e7eb; }
+          .label { font-size: 13px; color: #6b7280; }
+          .value { font-size: 14px; font-weight: 600; color: #111827; text-align: right; }
+          .total { font-size: 18px; font-weight: 700; color: #065f46; }
+          .footer { background: #f5f5f5; padding: 16px; text-align: center; font-size: 12px; color: #6b7280; }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <h1>Invoice Ready</h1>
+            <p>Shipment ${shipmentId}</p>
+          </div>
+          <div class="content">
+            <p>Hello ${recipientName},</p>
+            <p>Your updated invoice is ready. Please review the summary below.</p>
+
+            <table>
+              <tr>
+                <td class="label">Base Rate</td>
+                <td class="value">${breakdown.base || 0}</td>
+              </tr>
+              <tr>
+                <td class="label">Weight Cost</td>
+                <td class="value">${breakdown.weightCost || 0}</td>
+              </tr>
+              <tr>
+                <td class="label">Accessorial Fees</td>
+                <td class="value">${breakdown.accessorial?.total || 0}</td>
+              </tr>
+              <tr>
+                <td class="label">Location Surcharge</td>
+                <td class="value">${breakdown.location || 0}</td>
+              </tr>
+              <tr>
+                <td class="label">Time Surcharge</td>
+                <td class="value">${breakdown.timeSurcharge || 0}</td>
+              </tr>
+              <tr>
+                <td class="label">Discount</td>
+                <td class="value">-${breakdown.discount?.amount || 0}</td>
+              </tr>
+              <tr>
+                <td class="label">Tax</td>
+                <td class="value">${invoice.tax}</td>
+              </tr>
+              <tr>
+                <td class="label">Total (${invoice.currency})</td>
+                <td class="value total">${invoice.total}</td>
+              </tr>
+            </table>
+          </div>
+          <div class="footer">
+            <p>Thank you for choosing ParcelPoint.</p>
           </div>
         </div>
       </body>
